@@ -6122,6 +6122,7 @@ SWITCH_STANDARD_API(uuid_zombie_exec_function)
 #define SETVAR_SYNTAX "<uuid> <var> [value]"
 SWITCH_STANDARD_API(uuid_setvar_function)
 {
+	switch_event_t *event = NULL;
 	switch_core_session_t *psession = NULL;
 	char *mycmd = NULL, *argv[3] = { 0 };
 	int argc = 0;
@@ -6137,23 +6138,37 @@ SWITCH_STANDARD_API(uuid_setvar_function)
 				var_value = argv[2];
 			}
 
+			if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, "sxx::api_setvar") == SWITCH_STATUS_SUCCESS) {
+				switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Unique-ID", uuid);
+				switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Channel-Call-UUID", uuid);
+			}
+
 			if ((psession = switch_core_session_locate(uuid))) {
 				switch_channel_t *channel;
 				channel = switch_core_session_get_channel(psession);
 
 				if (zstr(var_name)) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "No variable name specified.\n");
+					switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Status", "Failed");
+					switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Reason", "-ERR No variable specified");
 					stream->write_function(stream, "-ERR No variable specified\n");
 				} else {
 					switch_channel_add_variable_var_check(channel, var_name, var_value, SWITCH_FALSE, SWITCH_STACK_BOTTOM);
+					switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Status", "Success");
+					switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Reason", "+OK");
 					stream->write_function(stream, "+OK\n");
 				}
 
 				switch_core_session_rwunlock(psession);
 
 			} else {
+				switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Status", "Failed");
+				switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Reason", "-ERR No such channel");
 				stream->write_function(stream, "-ERR No such channel!\n");
 			}
+
+			switch_event_fire(&event);
+
 			goto done;
 		}
 	}

@@ -1726,6 +1726,8 @@ static switch_status_t parse_command(listener_t *listener, switch_event_t **even
 		goto done;
 	}
 
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(listener->session), SWITCH_LOG_INFO, "[%p] %s", (void*)listener->sock, cmd);
+
 	if (switch_stristr("unload", cmd) && switch_stristr("mod_event_socket", cmd)) {
 		cmd = unload_cheat;
 	} else if (switch_stristr("reload", cmd) && switch_stristr("mod_event_socket", cmd)) {

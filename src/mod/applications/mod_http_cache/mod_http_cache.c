@@ -91,6 +91,7 @@ SWITCH_STANDARD_API(http_cache_tryget);
 SWITCH_STANDARD_API(http_cache_clear);
 SWITCH_STANDARD_API(http_cache_remove);
 SWITCH_STANDARD_API(http_cache_prefetch);
+SWITCH_STANDARD_API(uuid_cache_multi_get);
 
 #define DOWNLOAD_NEEDED "download"
 #define DOWNLOAD 1
@@ -1257,6 +1258,130 @@ SWITCH_STANDARD_API(http_cache_prefetch)
 	return status;
 }
 
+
+#define UUID_MULTI_GET_SYNTAX "<uuid> {param=val}<url>!{param=val}<url>"
+/**
+ * Get multi file from the cache, download if it isn't cached
+ */
+SWITCH_STANDARD_API(uuid_cache_multi_get)
+{
+	switch_status_t status = SWITCH_STATUS_SUCCESS;
+	switch_memory_pool_t *lpool = NULL;
+	switch_memory_pool_t *pool = NULL;
+	http_profile_t *profile = NULL;
+	switch_event_t *event = NULL;
+	char *filename = NULL;
+	char *filenames = NULL;
+	switch_event_t *params = NULL;
+	char *url = NULL;
+	int  arr_count = 0;
+	char *channel_id = "";
+	char *cmd_datas = NULL;
+	char *arr_datas[128] = { 0 };
+	char *str_urls = NULL;
+	char *arr_urls[128] = { 0 };
+
+	int refresh = SWITCH_FALSE;
+	int download = DOWNLOAD;
+
+	if (zstr(cmd)) {
+		stream->write_function(stream, "USAGE: %s\n", UUID_MULTI_GET_SYNTAX);
+		return SWITCH_STATUS_SUCCESS;
+	}
+
+	if (session) {
+		pool = switch_core_session_get_pool(session);
+	} else {
+		switch_core_new_memory_pool(&lpool);
+		pool = lpool;
+	}
+
+	// parse params get uuid and urls
+	cmd_datas = switch_core_strdup(pool, cmd);
+	if (!zstr(cmd_datas)) {
+		arr_count = switch_separate_string(cmd_datas, ' ', arr_datas, (sizeof(arr_datas) / sizeof(arr_datas[0])));
+
+		if (arr_count != 2) {
+			stream->write_function(stream, "USAGE: %s\n", UUID_MULTI_GET_SYNTAX);
+			return SWITCH_STATUS_SUCCESS;
+		}
+		channel_id = arr_datas[0];
+		str_urls = arr_datas[1];
+		arr_count = 0;
+	}
+
+
+	/* parse string urls to array */
+	if (!zstr(str_urls)) {
+		arr_count = switch_separate_string(str_urls, '!', arr_urls, (sizeof(arr_urls) / sizeof(arr_urls[0])));
+	}
+
+	/* download file and add cache */
+	if (arr_count != 0) {
+		int i = 0;
+		for (i = 0; arr_urls[i]; i++) {
+			char *tmp = filenames;
+			url = arr_urls[i];
+
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "UrlPart %d: %s\n", i, url);
+
+			if (*url == '{') {
+				switch_event_create_brackets(url, '{', '}', ',', &params, &url, SWITCH_FALSE);
+			}
+			if (params) {
+				profile = url_cache_http_profile_find(&gcache, switch_event_get_header(params, "profile"));
+				if (switch_true(switch_event_get_header(params, "prefetch"))) {
+					download = PREFETCH;
+				}
+				refresh = switch_true(switch_event_get_header(params, "refresh"));
+			}
+
+			filename = url_cache_get(&gcache, profile, session, url, download, refresh, pool);
+
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "LocalPart %s %d %s\n", channel_id, i, filename);
+
+			if (tmp != NULL) {
+				filenames = switch_mprintf("%s!%s", filenames, filename);
+				switch_safe_free(tmp);
+			} else {
+				filenames = switch_mprintf("%s", filename);
+			}
+		}
+	}
+	
+	/** send event */
+	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, "sxx::uuid_cache_multi_get") == SWITCH_STATUS_SUCCESS) {
+		switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Unique-ID", channel_id);
+		switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Channel-Call-UUID", channel_id);
+		if (filenames) {
+			switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Status", "Success");
+			switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Files", filenames);
+		} else {
+			switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Status", "Faiture");
+		}
+		switch_event_fire(&event);
+	}
+	
+	if (filenames) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s %s\n", channel_id, filenames);
+		stream->write_function(stream, "%s %s", channel_id, filenames);
+		switch_safe_free(filenames);
+	} else {
+		stream->write_function(stream, "-ERR\n");
+		status = SWITCH_STATUS_FALSE;
+	}
+
+	if (lpool) {
+		switch_core_destroy_memory_pool(&lpool);
+	}
+
+	if (params) {
+		switch_event_destroy(&params);
+	}
+
+	return status;
+}
+
 #define HTTP_GET_SYNTAX "{param=val}<url>"
 /**
  * Get a file from the cache, download if it isn't cached
@@ -1978,6 +2103,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_http_cache_load)
 	SWITCH_ADD_API(api, "http_clear_cache", "Clear the cache", http_cache_clear, HTTP_CACHE_CLEAR_SYNTAX);
 	SWITCH_ADD_API(api, "http_remove_cache", "Remove URL from cache", http_cache_remove, HTTP_CACHE_REMOVE_SYNTAX);
 	SWITCH_ADD_API(api, "http_prefetch", "Prefetch document in a background thread.  Use http_get to get the prefetched document", http_cache_prefetch, HTTP_PREFETCH_SYNTAX);
+
+	SWITCH_ADD_API(api, "uuid_http_multi_get", "UUID HTTP MULTI GET", uuid_cache_multi_get, UUID_MULTI_GET_SYNTAX);
 
 	memset(&gcache, 0, sizeof(url_cache_t));
 	gcache.pool = pool;
